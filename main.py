@@ -1,37 +1,55 @@
 import json
 import os
+import re
 import time
 import logging
 import pickle
+import traceback
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from seleniumwire import webdriver
-from seleniumwire.utils import decode
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.wait import WebDriverWait
-from selenium.common.exceptions import NoSuchElementException
-from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.remote.webelement import WebElement
 from webdriver_manager.chrome import ChromeDriverManager
 
 from my_logging import get_logger
 
 
+def append_to_json(filepath: str, data2append: str) -> None:
+    if not os.path.exists(filepath):
+        with open(filepath, 'w') as f:
+            json.dump([], f)
+    with open(filepath, 'r') as f:
+        data = json.load(f)
+    if data2append not in data:
+        data.append(data2append)
+    with open(filepath, 'w') as f:
+        json.dump(data, f, indent=4)
+
+
+def is_id_in_json(filepath: str, id_: str) -> bool:
+    if not os.path.exists(filepath):
+        return False
+    with open(filepath, 'r') as f:
+        data = json.load(f)
+    return True if id_ in data else False
+
+
 class Bot:
     filepath_cookies_profi_ru = 'cookies_profi'
-    filepath_tasks = 'tasks.json'
+    filepath_orders = 'orders_id.json'
 
     def __init__(self):
-        self.driver = None
+        self.driver = self.get_driver
         self.login_profi_ru = os.environ['LOGIN_PROFI_RU']
         self.password_profi_ru = os.environ['PASSWORD_PROFI_RU']
 
-    def get_driver(self) -> None:
+    @property
+    def get_driver(self) -> webdriver.Chrome:
         options = webdriver.ChromeOptions()
         options_wire = {
-            # 'ignore_http_methods': [],
-            # 'verify_ssl': True
             'disable_encoding': True
         }
         # fake user agent
@@ -42,10 +60,10 @@ class Bot:
         # disable web driver mode
         options.add_argument('--disable-blink-features=AutomationControlled')
         # headless mode
-        options.headless = False
+        options.headless = True
         # maximized window
         options.add_argument('--start-maximized')
-        self.driver = webdriver.Chrome(
+        return webdriver.Chrome(
             service=Service(ChromeDriverManager().install()),
             options=options,
             seleniumwire_options=options_wire
@@ -73,56 +91,170 @@ class Bot:
         self.find_element(By.XPATH, '//input[@type="password"][@required][@value]').send_keys(self.password_profi_ru)
         self.find_element(By.XPATH, '//a[text()="Продолжить"]').click()
 
-        # if WebDriverWait(self.driver, timeout=10).until(
-        #         EC.presence_of_element_located((By.XPATH, '//h1[text()="Введите код из СМС"]'))
-        # ):
-        #     sms_code = input('Input sms code: ')
-        #     cells = self.driver.find_elements(By.XPATH, '//div[@class="pin-form"]//input')
-        #     for i in range(len(cells)):
-        #         cells[i].send_keys(sms_code[i])
-    def find_request(self) -> dict:
-        """ Find POST request to get orders search result """
-        for request in self.driver.requests:
-            if request.response and request.url == 'https://profi.ru/backoffice/api/':
-                data = request.response.body.decode('utf-8')
-                data = json.loads(data)
-                if data.get('meta') and data.get('meta').get('method') == 'findOrders':
-                    return data
-
-    def parse_orders(self, data: dict):
-        for order in data['data']['orders']:
-            order_data = {
-                'id': order['id'],
-                'title': order['title']
-            }
-
-    def first_time_get_orders(self, scroll_pause_time=0.5):
-        data = self.find_request()
-        del self.driver.requests
-
-        while True:
-            self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-            time.sleep(scroll_pause_time)
-
-            # new_height = self.driver.execute_script("return document.body.scrollHeight")
-            # if new_height == last_height:
-            #     break
-            # last_height = new_height
-
-    def move_to_task_search(self):
+    def move_to_search(self) -> None:
         self.driver.get('https://profi.ru/backoffice/n.php')
-
         if self.find_element(By.XPATH, '//h1[text()="Вход и регистрация для профи"]'):
+            logging.info('Start authorizing')
             self.authorize()
             time.sleep(3)
             self.save_cookie(self.filepath_cookies_profi_ru)
 
+    def find_request(self, method: str, retries=3) -> dict | bool:
+        """ Find POST request to get orders search result """
+        for retry in range(retries):
+            for request in self.driver.requests:
+                if request.response and request.url == 'https://profi.ru/backoffice/api/':
+                    data = request.response.body.decode('utf-8')
+                    data = json.loads(data)
+                    if data.get('meta') and data.get('meta').get('method') == method:
+                        del self.driver.requests
+                        match len(data['errors']):
+                            case 0:
+                                return data
+                            case _:
+                                if data['errors'][0]['title'] == 'Unauthorized user':
+                                    logging.info('Unauthorized user')
+                                    time.sleep(9999)
+                                    self.driver.refresh()
+                                    return self.find_request(method)
+                                else:
+                                    return False
+            time.sleep(0.5)
+        else:
+            return False
+
+    def find_new_orders(self) -> int:
+        count_new_orders = 0
+        data = self.find_request('findOrders')
+        if not data:
+            return -1
+        for order in data['data']['orders']:
+            if order.get('type') == 'adFox' or is_id_in_json(self.filepath_orders, order['id']):
+                continue
+            else:
+                count_new_orders += 1
+                self.handle_new_order(order)
+        return count_new_orders
+
+    def handle_new_order(self, order: dict):
+        for i in range(3):
+            self.driver.get(f'https://profi.ru/backoffice/n.php?o={order["id"]}')
+            time.sleep(1)
+            if r := self.find_request('getOrder'):
+                order_datetime = datetime.strptime(
+                    r['data']['order']['receivd'], '%Y-%m-%d %H:%M:%S'
+                ).replace(tzinfo=ZoneInfo('Europe/Moscow'))
+                current_datetime = datetime.now(tz=ZoneInfo('Europe/Moscow'))
+                if current_datetime - timedelta(days=7) <= order_datetime:
+                    if current_datetime - timedelta(minutes=3) < order_datetime:
+                        return False
+                    description = r['data']['order']['aim'].lower()
+                    name = r['data']['order']['name']
+                    if self.filter_order(description, order['id']):
+                        if order['id'] == 52348913:  # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+                            try:
+                                self.response_to_order(name)
+                            except:
+                                logging.error(f'order_id={order["id"]}\n{traceback.format_exc()}')
+                                return False
+                append_to_json(self.filepath_orders, order['id'])
+                return True
+            else:
+                logging.error(f'Request was not found for {order["id"]}, trying again')
+                time.sleep(5)
+        else:
+            return False
+
+    @staticmethod
+    def filter_order(text: str, order_id: str) -> bool:
+        with open('pattern_bad.txt', 'r') as f:
+            pattern_bad = f.read()
+        # with open('pattern_good.txt', 'r') as f:
+        #    pattern_good = f.read()
+
+        to_work = False
+        if result := re.search(pattern_bad, text):
+            reason = result.group(0)
+            logging.info(f'{order_id=}; {to_work=}, {reason=}')
+        else:
+            to_work = True
+            # if result := re.search(pattern_good, text):
+            #    reason = result.group(0)
+            # else:
+            reason = None
+            logging.info(f'{order_id=}; {to_work=}')
+        return to_work
+
+    def response_to_order(self, name: str):
+        self.driver.implicitly_wait(1.5)
+        if not (btn_response := self.find_element(By.XPATH, '//p[text()="Написать клиенту"]//ancestor::button')):
+            return False
+
+        # response_price = self.find_element(
+        #     By.XPATH, '//div[@class="order-card-ppk__price"]//b'
+        # ).text.replace(' руб.', '')
+        btn_response.click()
+        time.sleep(0.5)
+
+        self.find_element(By.XPATH, '//p[text()="Дальше"]//ancestor::button').click()
+        time.sleep(0.5)
+
+        response_sample = self.find_element(
+            By.XPATH, '//div[@class="backoffice-common-list-item__text-container"]/p[@size]'
+        ).text
+        response_sample = response_sample.replace('Здравствуйте, !', f'Здравствуйте, {name}!')
+
+        self.find_element(
+            By.XPATH, '//textarea[@placeholder="Уточните детали задачи или предложите свои условия"]'
+        ).send_keys(response_sample)
+
+        self.find_element(
+            By.XPATH, '//p[text()="Отправить сообщение"]//ancestor::a'
+        ).click()
+        self.driver.implicitly_wait(0)
+
+    def loop_check_orders(self, mode: str, tab_main, tab_second):
+        while True:
+            self.driver.refresh() if mode == 'updates' else ...
+            self.driver.switch_to.window(tab_second)
+            count_new_orders = self.find_new_orders()
+            if count_new_orders == -1:
+                raise Exception('Coudn\'t get "findOrders" request.') 
+            self.driver.switch_to.window(tab_main)
+            if count_new_orders >= 3:
+                self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+                time.sleep(1)
+            else:
+                if mode == 'start':
+                    logging.info('First time getting orders finished')
+                    return True
+                elif mode == 'updates':
+                    logging.info('No new orders, sleeping...')
+                    time.sleep(30)
+
+    def run(self):
+        self.move_to_search()
+        self.driver.switch_to.new_window('tab')
+        tab_main, tab_second = self.driver.window_handles
+        self.loop_check_orders('start', tab_main, tab_second)
+        self.loop_check_orders('updates', tab_main, tab_second)
+
+
+def run_bot():
+    while True:
+        bot = Bot()
+        try:
+            bot.run()
+        except:
+            logging.error(f'FATAL ERROR\n{traceback.format_exc()}')
+            try:
+                bot.driver.quit()
+                del bot
+                logging.info('driver was quited')
+            except:
+                pass
+
 
 if __name__ == '__main__':
     get_logger('bot.log')
-    bot = Bot()
-    bot.get_driver()
-    bot.move_to_task_search()
-    bot.find_request()
-    time.sleep(999)
-    # bot.save_all_tasks()
+    run_bot()
