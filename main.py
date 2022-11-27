@@ -114,7 +114,6 @@ class Bot:
                             case _:
                                 if data['errors'][0]['title'] == 'Unauthorized user':
                                     logging.info('Unauthorized user')
-                                    time.sleep(9999)
                                     self.driver.refresh()
                                     return self.find_request(method)
                                 else:
@@ -148,15 +147,18 @@ class Bot:
                 if current_datetime - timedelta(days=7) <= order_datetime:
                     if current_datetime - timedelta(minutes=3) < order_datetime:
                         return False
-                    description = r['data']['order']['aim'].lower()
+                    text = '\n'.join(
+                            [
+                                r['data']['order']['subjects'],
+                                r['data']['order']['aim']
+                            ]).lower()
                     name = r['data']['order']['name']
-                    if self.filter_order(description, order['id']):
-                        if order['id'] == 52348913:  # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-                            try:
-                                self.response_to_order(name)
-                            except:
-                                logging.error(f'order_id={order["id"]}\n{traceback.format_exc()}')
-                                return False
+                    if self.filter_order(text, order['id']): 
+                        try:
+                            self.response_to_order(name)
+                        except:
+                            logging.error(f'order_id={order["id"]}\n{traceback.format_exc()}')
+                            return False
                 append_to_json(self.filepath_orders, order['id'])
                 return True
             else:
@@ -165,24 +167,19 @@ class Bot:
         else:
             return False
 
-    @staticmethod
-    def filter_order(text: str, order_id: str) -> bool:
+    def filter_order(self, text: str, order_id: str) -> bool:
         with open('pattern_bad.txt', 'r') as f:
             pattern_bad = f.read()
-        # with open('pattern_good.txt', 'r') as f:
-        #    pattern_good = f.read()
 
         to_work = False
         if result := re.search(pattern_bad, text):
             reason = result.group(0)
             logging.info(f'{order_id=}; {to_work=}, {reason=}')
+            # self.driver.save_screenshot(str(Path('screenshots', f'False_{order_id}.png')))
         else:
             to_work = True
-            # if result := re.search(pattern_good, text):
-            #    reason = result.group(0)
-            # else:
-            reason = None
             logging.info(f'{order_id=}; {to_work=}')
+            # self.driver.save_screenshot(str(Path('screenshots', f'True_{order_id}.png')))
         return to_work
 
     def response_to_order(self, name: str):
@@ -190,9 +187,6 @@ class Bot:
         if not (btn_response := self.find_element(By.XPATH, '//p[text()="Написать клиенту"]//ancestor::button')):
             return False
 
-        # response_price = self.find_element(
-        #     By.XPATH, '//div[@class="order-card-ppk__price"]//b'
-        # ).text.replace(' руб.', '')
         btn_response.click()
         time.sleep(0.5)
 
@@ -214,12 +208,17 @@ class Bot:
         self.driver.implicitly_wait(0)
 
     def loop_check_orders(self, mode: str, tab_main, tab_second):
+        retries = 0
         while True:
             self.driver.refresh() if mode == 'updates' else ...
             self.driver.switch_to.window(tab_second)
             count_new_orders = self.find_new_orders()
             if count_new_orders == -1:
-                raise Exception('Coudn\'t get "findOrders" request.') 
+                retries += 1
+                if retries == 3:
+                    raise Exception('Coudn\'t get "findOrders" request.') 
+                logging.error(f'Coudn\'t get "findOrders" request. retry: {retries}')
+                continue
             self.driver.switch_to.window(tab_main)
             if count_new_orders >= 3:
                 self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
@@ -245,8 +244,10 @@ def run_bot():
         bot = Bot()
         try:
             bot.run()
+        except KeyboardInterrupt:
+            raise
         except:
-            logging.error(f'FATAL ERROR\n{traceback.format_exc()}')
+            logging.error(f'ERROR\n{traceback.format_exc()}')
             try:
                 bot.driver.quit()
                 del bot
