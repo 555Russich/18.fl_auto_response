@@ -168,7 +168,7 @@ class Bot:
             return False
 
     def filter_order(self, text: str, order_id: str) -> bool:
-        with open('pattern_bad.txt', 'r') as f:
+        with open('pattern_bad.regexp', 'r', encoding='utf-8') as f:
             pattern_bad = f.read()
 
         to_work = False
@@ -187,6 +187,7 @@ class Bot:
         if not (btn_response := self.find_element(By.XPATH, '//p[text()="Написать клиенту"]//ancestor::button')):
             return False
 
+        self.driver.execute_script("arguments[0].scrollIntoView();", btn_response)
         btn_response.click()
         time.sleep(0.5)
 
