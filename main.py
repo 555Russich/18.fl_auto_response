@@ -86,7 +86,6 @@ class Bot:
 
     def authorize(self) -> None:
         """ Authorization with login and password """
-        # self.find_element(By.XPATH, '//a[text()="Вход для специалистов"]').click()
         self.find_element(By.XPATH, '//input[@type="text"][@required][@value]').send_keys(self.login_profi_ru)
         self.find_element(By.XPATH, '//input[@type="password"][@required][@value]').send_keys(self.password_profi_ru)
         self.find_element(By.XPATH, '//a[text()="Продолжить"]').click()
@@ -146,6 +145,7 @@ class Bot:
                 current_datetime = datetime.now(tz=ZoneInfo('Europe/Moscow'))
                 if current_datetime - timedelta(days=7) <= order_datetime:
                     if current_datetime - timedelta(minutes=3) < order_datetime:
+                        # self.find_element(By.XPATH, '//a[text()="Вход для специалистов"]').click()
                         return False
                     text = '\n'.join(
                             [
