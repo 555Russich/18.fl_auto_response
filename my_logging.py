@@ -8,7 +8,7 @@ def get_logger(filename):
         format="[{asctime}]:[{levelname}]:[{message}]",
         style='{',
         handlers=[
-            logging.FileHandler(filename, mode='w'),
+            logging.FileHandler(filename, mode='a'),
             logging.StreamHandler(sys.stdout),
         ]
     )
