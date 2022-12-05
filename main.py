@@ -176,11 +176,11 @@ class Bot:
         to_work = False
         if result := re.search(pattern_bad, text):
             reason = result.group(0)
-            logging.info(f'{order_id=}; {to_work=}, {reason=}')
+            logging.info(f'{order_id=}; {to_work=}, {reason=}\n{text}\n')
             # self.driver.save_screenshot(str(Path('screenshots', f'False_{order_id}.png')))
         else:
             to_work = True
-            logging.info(f'{order_id=}; {to_work=}')
+            logging.info(f'{order_id=}; {to_work=}\n{text}\n')
             # self.driver.save_screenshot(str(Path('screenshots', f'True_{order_id}.png')))
         return to_work
 
