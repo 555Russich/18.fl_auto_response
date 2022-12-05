@@ -100,6 +100,7 @@ class Bot:
 
     def find_request(self, method: str, retries=3) -> dict | bool:
         """ Find POST request to get orders search result """
+
         for retry in range(retries):
             for request in self.driver.requests:
                 if request.response and request.url == 'https://profi.ru/backoffice/api/':
@@ -198,7 +199,7 @@ class Bot:
         response_sample = self.find_element(
             By.XPATH, '//div[@class="backoffice-common-list-item__text-container"]/p[@size]'
         ).text
-        response_sample = response_sample.replace('Здравствуйте, !', f'Здравствуйте, {name}!')
+        # response_sample = response_sample.replace('Здравствуйте, !', f'Здравствуйте, {name}!')
 
         self.find_element(
             By.XPATH, '//textarea[@placeholder="Уточните детали задачи или предложите свои условия"]'
