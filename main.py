@@ -119,6 +119,7 @@ class Bot:
                                     return False
             time.sleep(0.5)
         else:
+            del self.driver.requests
             return False
 
     def find_new_orders(self) -> int:
